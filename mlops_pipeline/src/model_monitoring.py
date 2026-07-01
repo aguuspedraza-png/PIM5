@@ -207,8 +207,9 @@ with tab2:
             'dataset': ['Referencia'] * len(X_ref) + ['Nuevo'] * len(X_new)
         })
         fig = px.histogram(df_plot, x='valor', color='dataset', barmode='overlay',
-                          title=f'Distribucion de {variable}',
-                          opacity=0.7)
+                  title=f'Distribucion de {variable}',
+                  opacity=0.7,
+                  color_discrete_map={'Referencia': "#b373f0", 'Nuevo': "#1bc5b7"})
         st.plotly_chart(fig, use_container_width=True)
 
         stat, pvalue = ks_test(variable)
@@ -229,7 +230,9 @@ with tab2:
 
         df_cat = pd.concat([ref_pct, new_pct])
         fig = px.bar(df_cat, x=variable, y='proporcion', color='dataset',
-                    barmode='group', title=f'Distribucion de {variable}')
+            barmode='group', title=f'Distribucion de {variable}',
+            color_discrete_map={'Referencia': "#79bac2", 'Nuevo': "#ee679b"})
+        
         st.plotly_chart(fig, use_container_width=True)
 
         try:
