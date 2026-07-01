@@ -1,10 +1,10 @@
+
 import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.express as px
 from scipy import stats
 from scipy.spatial import distance
-from sklearn.model_selection import train_test_split
 
 st.set_page_config(page_title="Monitoreo del Modelo", layout="wide")
 
@@ -22,17 +22,26 @@ def cargarDatos():
     return df
 
 # ==========================================
-# 2. Cargar y dividir datos
+# 2. Cargar datos
 # ==========================================
 
 @st.cache_data
 def load_data():
-    df = cargarDatos()
-    X = df.drop(columns=['Pago_atiempo'])
-    y = df['Pago_atiempo']
-    X_ref, X_new, y_ref, y_new = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
+    # datos de referencia (original)
+    df_ref = cargarDatos()
+    X_ref = df_ref.drop(columns=['Pago_atiempo'])
+    y_ref = df_ref['Pago_atiempo']
+
+    # datos nuevos (simulado con drift de excel)
+    df_new = pd.read_excel('../../Base_de_datos_con_Data_Drift_Simulado.xlsx')
+    df_new['tendencia_ingresos'] = df_new['tendencia_ingresos'].fillna('Desconocido')
+    categorias_validas = ['Creciente', 'Decreciente', 'Estable']
+    df_new.loc[~df_new['tendencia_ingresos'].isin(categorias_validas), 'tendencia_ingresos'] = 'Desconocido'
+    df_new['fecha_prestamo'] = pd.to_datetime(df_new['fecha_prestamo'])
+    df_new['fecha_prestamo'] = df_new['fecha_prestamo'].dt.strftime('%Y%m%d').astype(int)
+    X_new = df_new.drop(columns=['Pago_atiempo'])
+    y_new = df_new['Pago_atiempo']
+
     return X_ref, X_new, y_ref, y_new
 
 X_ref, X_new, y_ref, y_new = load_data()
@@ -100,12 +109,22 @@ def semaforo_js(valor):
     else:
         return "🟢 OK"
 
+def tiene_alerta(row):
+    estados = [row.get('KS Estado'), row.get('PSI Estado'),
+               row.get('JS Estado'), row.get('Chi2 Estado')]
+    return "🔴 ALERTA" in estados
+
+def tiene_precaucion(row):
+    estados = [row.get('KS Estado'), row.get('PSI Estado'),
+               row.get('JS Estado'), row.get('Chi2 Estado')]
+    return "🟡 PRECAUCION" in estados and "🔴 ALERTA" not in estados
+
 # ==========================================
 # 4. Interfaz Streamlit
 # ==========================================
 
 st.title("Monitoreo del Modelo - FitPredict")
-st.markdown("Comparacion entre datos de referencia (train) y datos nuevos (test) para deteccion de data drift.")
+st.markdown("Comparacion entre datos de referencia (original) y datos nuevos (simulado con drift) para deteccion de data drift.")
 
 tab1, tab2, tab3 = st.tabs(["Resumen de Drift", "Analisis por Variable", "Recomendaciones"])
 
@@ -134,7 +153,10 @@ with tab1:
             'PSI': psi_val,
             'PSI Estado': semaforo_psi(psi_val),
             'Jensen-Shannon': js_val,
-            'JS Estado': semaforo_js(js_val)
+            'JS Estado': semaforo_js(js_val),
+            'Chi2 Estadistico': None,
+            'Chi2 P-value': None,
+            'Chi2 Estado': None
         })
 
     for col in cat_cols:
@@ -143,13 +165,13 @@ with tab1:
             resultados.append({
                 'Variable': col,
                 'Tipo': 'Categorica',
-                'KS Estadistico': '-',
-                'KS P-value': '-',
-                'KS Estado': '-',
-                'PSI': '-',
-                'PSI Estado': '-',
-                'Jensen-Shannon': '-',
-                'JS Estado': '-',
+                'KS Estadistico': None,
+                'KS P-value': None,
+                'KS Estado': None,
+                'PSI': None,
+                'PSI Estado': None,
+                'Jensen-Shannon': None,
+                'JS Estado': None,
                 'Chi2 Estadistico': stat,
                 'Chi2 P-value': pvalue,
                 'Chi2 Estado': semaforo(pvalue)
@@ -160,21 +182,15 @@ with tab1:
     df_resultados = pd.DataFrame(resultados)
     st.dataframe(df_resultados, use_container_width=True)
 
-    alertas = df_resultados[
-        (df_resultados['KS Estado'] == "🔴 ALERTA") |
-        (df_resultados['PSI Estado'] == "🔴 ALERTA") |
-        (df_resultados['JS Estado'] == "🔴 ALERTA")
-    ]
-    precauciones = df_resultados[
-        (df_resultados['KS Estado'] == "🟡 PRECAUCION") |
-        (df_resultados['PSI Estado'] == "🟡 PRECAUCION") |
-        (df_resultados['JS Estado'] == "🟡 PRECAUCION")
-    ]
+    alertas = df_resultados[df_resultados.apply(tiene_alerta, axis=1)]
+    precauciones = df_resultados[df_resultados.apply(tiene_precaucion, axis=1)]
+    ok = df_resultados[~df_resultados.apply(tiene_alerta, axis=1) &
+                       ~df_resultados.apply(tiene_precaucion, axis=1)]
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Variables en ALERTA", len(alertas))
     col2.metric("Variables en PRECAUCION", len(precauciones))
-    col3.metric("Variables OK", len(df_resultados) - len(alertas) - len(precauciones))
+    col3.metric("Variables OK", len(ok))
 
 # ==========================================
 # TAB 2: Analisis por variable
@@ -223,7 +239,7 @@ with tab2:
             st.warning("No se pudo calcular el test para esta variable.")
 
 # ==========================================
-# TAB 3: Recomendaciones
+# TAB 3: Recomendaciones str
 # ==========================================
 
 with tab3:
@@ -234,7 +250,16 @@ with tab3:
     else:
         st.error(f"Se detectaron {len(alertas)} variable(s) con drift significativo:")
         for _, row in alertas.iterrows():
-            st.warning(f"Variable **{row['Variable']}** — KS P-value: {row['KS P-value']}")
+            estado_info = []
+            if row.get('KS Estado') == "🔴 ALERTA":
+                estado_info.append(f"KS P-value: {row['KS P-value']}")
+            if row.get('PSI Estado') == "🔴 ALERTA":
+                estado_info.append(f"PSI: {row['PSI']}")
+            if row.get('JS Estado') == "🔴 ALERTA":
+                estado_info.append(f"Jensen-Shannon: {row['Jensen-Shannon']}")
+            if row.get('Chi2 Estado') == "🔴 ALERTA":
+                estado_info.append(f"Chi2 P-value: {row['Chi2 P-value']}")
+            st.warning(f"Variable **{row['Variable']}** — {', '.join(estado_info)}")
 
         st.markdown("""
         ### Acciones sugeridas:
@@ -247,4 +272,4 @@ with tab3:
     if len(precauciones) > 0:
         st.warning(f"{len(precauciones)} variable(s) en zona de precaucion — monitorear de cerca:")
         for _, row in precauciones.iterrows():
-            st.info(f"Variable **{row['Variable']}** — KS P-value: {row['KS P-value']}")
+            st.info(f"Variable **{row['Variable']}**")
