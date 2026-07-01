@@ -3,6 +3,7 @@ import numpy as np
 import streamlit as st
 import plotly.express as px
 from scipy import stats
+from scipy.spatial import distance
 from sklearn.model_selection import train_test_split
 
 st.set_page_config(page_title="Monitoreo del Modelo", layout="wide")
@@ -13,14 +14,11 @@ st.set_page_config(page_title="Monitoreo del Modelo", layout="wide")
 
 def cargarDatos():
     df = pd.read_csv('../../Base_de_datos.csv', sep=';')
-
     df['tendencia_ingresos'] = df['tendencia_ingresos'].fillna('Desconocido')
     categorias_validas = ['Creciente', 'Decreciente', 'Estable']
     df.loc[~df['tendencia_ingresos'].isin(categorias_validas), 'tendencia_ingresos'] = 'Desconocido'
-
     df['fecha_prestamo'] = pd.to_datetime(df['fecha_prestamo'], format='%d/%m/%Y %H:%M')
     df['fecha_prestamo'] = df['fecha_prestamo'].dt.strftime('%Y%m%d').astype(int)
-
     return df
 
 # ==========================================
@@ -56,10 +54,48 @@ def chi2_test(col):
     )[:2]
     return round(stat, 4), round(pvalue, 4)
 
+def psi(col, bins=10):
+    ref = X_ref[col].dropna()
+    new = X_new[col].dropna()
+    breakpoints = np.linspace(min(ref.min(), new.min()), max(ref.max(), new.max()), bins + 1)
+    ref_counts = np.histogram(ref, bins=breakpoints)[0] + 1e-6
+    new_counts = np.histogram(new, bins=breakpoints)[0] + 1e-6
+    ref_pct = ref_counts / ref_counts.sum()
+    new_pct = new_counts / new_counts.sum()
+    psi_val = np.sum((new_pct - ref_pct) * np.log(new_pct / ref_pct))
+    return round(psi_val, 4)
+
+def jensen_shannon(col):
+    ref = X_ref[col].dropna()
+    new = X_new[col].dropna()
+    bins = np.linspace(min(ref.min(), new.min()), max(ref.max(), new.max()), 20)
+    ref_hist = np.histogram(ref, bins=bins)[0] + 1e-6
+    new_hist = np.histogram(new, bins=bins)[0] + 1e-6
+    ref_pct = ref_hist / ref_hist.sum()
+    new_pct = new_hist / new_hist.sum()
+    js = distance.jensenshannon(ref_pct, new_pct)
+    return round(js, 4)
+
 def semaforo(pvalue):
     if pvalue < 0.05:
         return "🔴 ALERTA"
     elif pvalue < 0.1:
+        return "🟡 PRECAUCION"
+    else:
+        return "🟢 OK"
+
+def semaforo_psi(valor):
+    if valor > 0.2:
+        return "🔴 ALERTA"
+    elif valor > 0.1:
+        return "🟡 PRECAUCION"
+    else:
+        return "🟢 OK"
+
+def semaforo_js(valor):
+    if valor > 0.3:
+        return "🔴 ALERTA"
+    elif valor > 0.15:
         return "🟡 PRECAUCION"
     else:
         return "🟢 OK"
@@ -71,7 +107,6 @@ def semaforo(pvalue):
 st.title("Monitoreo del Modelo - FitPredict")
 st.markdown("Comparacion entre datos de referencia (train) y datos nuevos (test) para deteccion de data drift.")
 
-# --- Tabs principales ---
 tab1, tab2, tab3 = st.tabs(["Resumen de Drift", "Analisis por Variable", "Recomendaciones"])
 
 # ==========================================
@@ -88,13 +123,18 @@ with tab1:
 
     for col in num_cols:
         stat, pvalue = ks_test(col)
+        psi_val = psi(col)
+        js_val = jensen_shannon(col)
         resultados.append({
             'Variable': col,
             'Tipo': 'Numerica',
-            'Test': 'KS',
-            'Estadistico': stat,
-            'P-value': pvalue,
-            'Estado': semaforo(pvalue)
+            'KS Estadistico': stat,
+            'KS P-value': pvalue,
+            'KS Estado': semaforo(pvalue),
+            'PSI': psi_val,
+            'PSI Estado': semaforo_psi(psi_val),
+            'Jensen-Shannon': js_val,
+            'JS Estado': semaforo_js(js_val)
         })
 
     for col in cat_cols:
@@ -103,10 +143,16 @@ with tab1:
             resultados.append({
                 'Variable': col,
                 'Tipo': 'Categorica',
-                'Test': 'Chi2',
-                'Estadistico': stat,
-                'P-value': pvalue,
-                'Estado': semaforo(pvalue)
+                'KS Estadistico': '-',
+                'KS P-value': '-',
+                'KS Estado': '-',
+                'PSI': '-',
+                'PSI Estado': '-',
+                'Jensen-Shannon': '-',
+                'JS Estado': '-',
+                'Chi2 Estadistico': stat,
+                'Chi2 P-value': pvalue,
+                'Chi2 Estado': semaforo(pvalue)
             })
         except:
             pass
@@ -114,8 +160,16 @@ with tab1:
     df_resultados = pd.DataFrame(resultados)
     st.dataframe(df_resultados, use_container_width=True)
 
-    alertas = df_resultados[df_resultados['Estado'] == "🔴 ALERTA"]
-    precauciones = df_resultados[df_resultados['Estado'] == "🟡 PRECAUCION"]
+    alertas = df_resultados[
+        (df_resultados['KS Estado'] == "🔴 ALERTA") |
+        (df_resultados['PSI Estado'] == "🔴 ALERTA") |
+        (df_resultados['JS Estado'] == "🔴 ALERTA")
+    ]
+    precauciones = df_resultados[
+        (df_resultados['KS Estado'] == "🟡 PRECAUCION") |
+        (df_resultados['PSI Estado'] == "🟡 PRECAUCION") |
+        (df_resultados['JS Estado'] == "🟡 PRECAUCION")
+    ]
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Variables en ALERTA", len(alertas))
@@ -142,7 +196,11 @@ with tab2:
         st.plotly_chart(fig, use_container_width=True)
 
         stat, pvalue = ks_test(variable)
+        psi_val = psi(variable)
+        js_val = jensen_shannon(variable)
         st.info(f"KS Test — Estadistico: {stat} | P-value: {pvalue} | Estado: {semaforo(pvalue)}")
+        st.info(f"PSI — Valor: {psi_val} | Estado: {semaforo_psi(psi_val)}")
+        st.info(f"Jensen-Shannon — Valor: {js_val} | Estado: {semaforo_js(js_val)}")
 
     else:
         ref_pct = X_ref[variable].value_counts(normalize=True).reset_index()
@@ -176,7 +234,7 @@ with tab3:
     else:
         st.error(f"Se detectaron {len(alertas)} variable(s) con drift significativo:")
         for _, row in alertas.iterrows():
-            st.warning(f"Variable **{row['Variable']}** — P-value: {row['P-value']}")
+            st.warning(f"Variable **{row['Variable']}** — KS P-value: {row['KS P-value']}")
 
         st.markdown("""
         ### Acciones sugeridas:
@@ -189,4 +247,4 @@ with tab3:
     if len(precauciones) > 0:
         st.warning(f"{len(precauciones)} variable(s) en zona de precaucion — monitorear de cerca:")
         for _, row in precauciones.iterrows():
-            st.info(f"Variable **{row['Variable']}** — P-value: {row['P-value']}")
+            st.info(f"Variable **{row['Variable']}** — KS P-value: {row['KS P-value']}")
