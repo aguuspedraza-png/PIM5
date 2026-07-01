@@ -209,7 +209,7 @@ with tab2:
         fig = px.histogram(df_plot, x='valor', color='dataset', barmode='overlay',
                   title=f'Distribucion de {variable}',
                   opacity=0.7,
-                  color_discrete_map={'Referencia': "#b373f0", 'Nuevo': "#1bc5b7"})
+                  color_discrete_map={'Referencia': "#79bac2", 'Nuevo': "#b373f0"})
         st.plotly_chart(fig, use_container_width=True)
 
         stat, pvalue = ks_test(variable)
