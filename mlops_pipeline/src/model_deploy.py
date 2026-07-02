@@ -1,3 +1,4 @@
+import os
 import joblib
 import pandas as pd
 import numpy as np
@@ -84,4 +85,6 @@ def predict(batch: BatchSolicitud):
 # ==========================================
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    HOST = os.getenv("HOST", "127.0.0.1")
+    uvicorn.run(app, host=HOST, port=8000)
+
