@@ -120,3 +120,8 @@ PIM5/
 - **Version control:** Git + GitHub (Gitflow)
 - **Infraestructura:** Docker Desktop (WSL2)
 
+
+Para el monitoreo de data drift se utilizan dos fuentes de datos:
+- **Base_de_datos.csv**: dataset original, usado como referencia (datos historicos de entrenamiento).
+
+- **Base_de_datos_con_Data_Drift_Simulado.xlsx**: dataset simulado provisto por la catedra, que representa datos nuevos con cambios intencionales en la distribucion de las variables, permitiendo detectar drift real entre ambos periodos.
